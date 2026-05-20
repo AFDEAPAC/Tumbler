@@ -1,0 +1,8 @@
+[submodule "rocm-systems"]
+	path = rocm-systems
+	url = https://github.com/chun-wan/rocm-systems.git
+	branch = tumbler-integrated
+[submodule "amdgpu"]
+	path = amdgpu
+	url = https://github.com/chun-wan/amdgpu.git
+	branch = tumbler-integrated
