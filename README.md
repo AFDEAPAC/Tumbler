@@ -1,12 +1,17 @@
-# Project Tumbler — ROCm Runtime & Driver Survival Stack
+# TUMBLER — ROCm Runtime & Driver Survival Stack
 
 ![cover](docs/cover.png)
 
-> **Resilient in extreme conditions.** A layered survival firewall for AMD
-> ROCm across the CLR (HIP host runtime), ROCr (HSA runtime), and amdgpu
+> **TUMBLER** — a **T**hree-tier **U**nified **M**ulti-tenant **B**ounded-wait
+> **L**ayered **E**scape-hatch **R**untime — is a layered survival firewall for
+> AMD ROCm across the CLR (HIP host runtime), ROCr (HSA runtime), and amdgpu
 > (kernel driver) layers. Bounded-wait knobs at every layer let production AI
 > serving stacks degrade gracefully — drop the affected request — instead of
 > aborting the whole process on a transient hardware or driver fault.
+>
+> The name fits the function: a *tumbler* is a self-righting toy — push it
+> over and it pops back upright. Tumbler does the same for the ROCm runtime
+> under transient HW and driver faults.
 
 ## Why Tumbler
 
