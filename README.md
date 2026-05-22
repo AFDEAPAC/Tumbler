@@ -41,15 +41,25 @@ opt-in bounded-wait knobs at every layer that turn those abort sites into
 ```
 Tumbler/
 ├── README.md
+├── .gitignore
 ├── .gitmodules
 ├── docs/
 │   ├── cover.png
-│   ├── paper/                # GTAC2025 submission
-│   │   ├── tumbler-paper-gtac2025.docx
-│   │   └── figures/
+│   ├── paper/                # GTAC 2026 submission
+│   │   ├── tumbler-paper-gtac2026.docx
+│   │   ├── tumbler-paper-gtac2026.pdf
+│   │   ├── figures/                  # source SVG/PNG figures
+│   │   └── figures-rendered/         # rendered page-{1..5}.png (review)
 │   ├── slides/
-│   │   └── tumbler-slides-gtac2025.pptx
-│   └── templates/            # GTAC2025 templates (traceability)
+│   │   ├── tumbler-slides-gtac2026.pptx
+│   │   ├── tumbler-slides-gtac2026.pdf
+│   │   └── figures-rendered/         # rendered slide-{01..13}.png (review)
+│   └── templates/            # GTAC 2025 templates (traceability)
+├── scripts/                  # reproducible artifact builders
+│   ├── build_paper.py        # docx -> docs/paper/tumbler-paper-gtac2026.docx
+│   ├── build_slides.py       # pptx -> docs/slides/tumbler-slides-gtac2026.pptx
+│   ├── make_waveform.py      # regenerates fig-05-latency-waveform.png
+│   └── verify_paper.py       # sanity-checks the produced docx
 ├── rocm-systems/             # submodule: chun-wan/rocm-systems @ tumbler-integrated
 │                             # (upstream develop + CLR #6328 + ROCr #6329)
 └── amdgpu/                   # submodule: chun-wan/amdgpu @ tumbler-integrated
@@ -72,6 +82,30 @@ cd rocm-systems
 # amdgpu (build via DKMS; see ROCm/amdgpu/README)
 cd ../amdgpu
 make -C drivers/gpu/drm/amd/amdgpu
+```
+
+## Reproduce the paper / slides
+
+The committed `.docx` / `.pptx` / `.pdf` artifacts can be regenerated from the
+templates and source figures via the scripts in `scripts/`. They take their
+input from `docs/templates/` + `docs/paper/figures/` and write into
+`docs/paper/` and `docs/slides/`:
+
+```bash
+pip install python-docx python-pptx matplotlib   # build-time deps
+python3 scripts/build_paper.py
+python3 scripts/build_slides.py
+
+# Optional: re-render the PDF + page PNGs used in figures-rendered/
+sudo apt-get install -y libreoffice poppler-utils
+libreoffice --headless --convert-to pdf --outdir docs/paper  \
+            docs/paper/tumbler-paper-gtac2026.docx
+libreoffice --headless --convert-to pdf --outdir docs/slides \
+            docs/slides/tumbler-slides-gtac2026.pptx
+pdftoppm -r 110 docs/paper/tumbler-paper-gtac2026.pdf  \
+                docs/paper/figures-rendered/page  -png
+pdftoppm -r 110 docs/slides/tumbler-slides-gtac2026.pdf \
+                docs/slides/figures-rendered/slide -png
 ```
 
 ## Gold settings (rc4 deployed reference)

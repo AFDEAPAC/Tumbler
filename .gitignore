@@ -1,0 +1,27 @@
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# LibreOffice / Office lock files
+.~lock.*#
+~$*.docx
+~$*.pptx
+~$*.xlsx
+
+# Editor swap / tmp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build leftovers
+/build/
+/dist/
+
+# Sphinx / docs builds
+_build/
+
+# Scratch dirs sometimes used by builders
+/scripts/__pycache__/
