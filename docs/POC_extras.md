@@ -276,3 +276,40 @@ against host-side processes (no container needed).
 
 Source commit: `34dc6cb..HEAD` (slice-i+ii) on
 [`AFDEAPAC/tumbler-container-runtime`](https://github.com/AFDEAPAC/tumbler-container-runtime).
+
+## Forward-looking design — CLR / ROCr plugin ABI (added 2026-05-29)
+
+After working through the design space for runtime over-use control
+(SIGUSR1 cooperative hints, cgroup escalator, LD_PRELOAD shim,
+seccomp-notify intercept), it became clear that none of those paths
+are simultaneously *non-destructive*, *distributed-safe*, and
+*vendor-acceptable*. seccomp-notify trades hang for abort; LD_PRELOAD
+has no stable ABI; cgroup throttling can't enforce per-tenant memory
+caps.
+
+The clean solution is to ask AMD ROCm to expose a small, versioned
+plugin ABI in CLR (HIP runtime) and ROCr (HSA runtime), so external
+tenant managers can apply policy at well-defined call sites using
+sanctioned HSA/HIP status codes. This:
+
+- closes Tumbler's biggest gap with NVIDIA MPS (per-tenant memory
+  cap and kernel-launch admission) without an MPS-style proxy
+  process;
+- makes runtime delays "legitimate" because the framework already
+  knows how to retry on `HSA_STATUS_INFO_BREAK` /
+  `HSA_STATUS_ERROR_OUT_OF_RESOURCES`;
+- provides distributed symmetry — the plugin loads on every node,
+  so any latency injection is uniform across ranks (no NCCL
+  desync).
+
+Full design at:
+[`AFDEAPAC/tumbler-container-runtime/docs/clr_rocr_plugin_design.md`](https://github.com/AFDEAPAC/tumbler-container-runtime/blob/main/docs/clr_rocr_plugin_design.md).
+ABI sketches at:
+[`docs/api/rocr_plugin_v1.h`](https://github.com/AFDEAPAC/tumbler-container-runtime/blob/main/docs/api/rocr_plugin_v1.h)
+and
+[`docs/api/clr_plugin_v1.h`](https://github.com/AFDEAPAC/tumbler-container-runtime/blob/main/docs/api/clr_plugin_v1.h).
+
+Implementation strategy: phase 1 ships the hook logic as
+`libtumbler-plugin.so` invoked via LD_PRELOAD wrapper (off-by-default
+optional); phase 2 is the AMD ROCm conversation; phase 3 is the
+vendor-blessed plugin landing in stock ROCm.
