@@ -148,3 +148,55 @@ Full mapping table + A/B run logs:
 [`s3://home/chun-wan/tumbler-poc-report/index.html`](https://github.com/AFDEAPAC/Tumbler)
 section *Runtime support boundary*; raw artefacts under
 `s3://home/chun-wan/tumbler-poc-report/runtime-boundary/`.
+
+## Memory Guard core (added 2026-05-28, after upstream-design pivot)
+
+Following customer feedback that destructive kernel patches are not
+upstream-friendly, we re-positioned the toolkit as a **non-invasive
+container-level memory guard**. Four core mechanisms ship on by default
+and require no changes to CLR / ROCr / amdgpu:
+
+1. **fdinfo per-process pin observer** — agent walks
+   `/proc/<pid>/fdinfo/<fd>` for every registered container and
+   exports per-(container, gpu) gauges. Closes the
+   "RDMA pin path was invisible from outside" gap without touching
+   the workload.
+2. **Admission gate (prestart)** — refuses to register a container
+   whose reservation would push a GPU past
+   `total × (1 - headroom_ratio)` (default 0.85 threshold).
+   `docker create` aborts at the prestart hook with a clear OCI error
+   before runc starts the workload, so the kernel never enters the
+   eviction path.
+3. **Priority preempt picker** — when watermark crosses high, the
+   `evict_high` JSON event is routed to the lowest-priority subscriber
+   on that GPU (read from spec annotation `tumbler.priority=low|normal|high`)
+   instead of broadcasting. High-priority workloads are shielded.
+4. **cgroup memory.max + auto K-5 link** — already shipping; prestart
+   hook sets `memory.max` from `--memory` and writes
+   `amdgpu.pin_max_bytes = memcg.max × 0.75` when K-5 kernel patches
+   are present (graceful fallback when not).
+
+The aggressive features (LD_PRELOAD bounded-wait shim, stuck-syscall
+SIGKILL watchdog, in-process budget intercept) are downgraded to
+**off-by-default opt-in flags** in `internal/config.OptionalConfig`.
+See [`docs/GUARD_AND_OPTIONAL.md`](https://github.com/AFDEAPAC/tumbler-container-runtime/blob/main/docs/GUARD_AND_OPTIONAL.md)
+for the full design rationale.
+
+### Real-machine validation on 8×MI250X
+
+| Scenario | Result |
+|---|---|
+| Admission gate refuses 3rd over-commit | PASS — `docker create` returned `tumbler admission gate refused container ...: admission rejected: gpu=0 would exceed admission threshold: effective=32568848384 want=16106127360 threshold=34351349760 (total=68702699520, headroom=50%)` |
+| Priority picker shields HIGH | PASS — HIGH subscriber received 0 evict_high events; LOW received 1 evict_high JSON + 1 SIGUSR1 |
+| fdinfo observes any registered PID | PASS — host-side vram-stress PID exposed `tumbler_container_gtt_requested_bytes{container="host-fdinfo",gpu="0..7"} 2.17e+06` for all 8 GPUs without workload cooperation |
+
+### New Prometheus metrics
+
+- `tumbler_container_vram_requested_bytes{container, gpu}`
+- `tumbler_container_vram_evicted_bytes{container, gpu}`
+- `tumbler_container_gtt_requested_bytes{container, gpu}`
+- `tumbler_admission_rejects_total{gpu, reason}`
+
+Source commit: `1b778e3..34dc6cb` on
+[`AFDEAPAC/tumbler-container-runtime`](https://github.com/AFDEAPAC/tumbler-container-runtime).
+Demo logs: [`s3://home/chun-wan/tumbler-poc-report/runtime-boundary/e_guard.tgz`](https://github.com/AFDEAPAC/Tumbler).
