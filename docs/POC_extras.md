@@ -200,3 +200,79 @@ for the full design rationale.
 Source commit: `1b778e3..34dc6cb` on
 [`AFDEAPAC/tumbler-container-runtime`](https://github.com/AFDEAPAC/tumbler-container-runtime).
 Demo logs: [`s3://home/chun-wan/tumbler-poc-report/runtime-boundary/e_guard.tgz`](https://github.com/AFDEAPAC/Tumbler).
+
+## Pin-observability slice i + ii (added 2026-05-28 evening)
+
+After deciding **not** to add an LD_PRELOAD shim or seccomp ioctl
+intercept yet, we extended the existing fdinfo + procfs reader paths
+so the agent can answer *"how much host memory is each container
+actually holding GPU-side?"* without touching CLR / ROCr / kernel.
+This is the first concrete step toward parity with NVIDIA MPS's
+per-client pinned-host accounting — done entirely in userspace from
+`/proc`.
+
+### Slice (i) — fdinfo expanded (`internal/sysfs/fdinfo.go`)
+
+`FdInfo` now also captures the kernel-6.10+ residency fields:
+
+- `drm-resident-vram` → `tumbler_container_vram_resident_bytes`
+- `drm-resident-gtt`  → `tumbler_container_gtt_resident_bytes`
+- `drm-resident-cpu`  → `tumbler_container_cpu_resident_bytes`
+- combined            → `tumbler_container_host_pinned_bytes`
+  (= GTT-resident + CPU-resident, the "MPS-equivalent" view)
+
+Both naming conventions (`drm-memory-*` *and* `drm-total-*` /
+`drm-resident-*`) are parsed so we work on every supported kernel.
+
+### Slice (ii) — procmaps reader (`internal/sysfs/procmaps.go`)
+
+Walks `/proc/<pid>/maps` for every registered container and
+classifies mappings by backing device:
+
+| /proc/maps path             | Metric                                          |
+|-----------------------------|-------------------------------------------------|
+| `/dev/dri/renderD<minor>`   | `tumbler_container_drm_mapped_bytes{gpu}`       |
+| `/dev/kfd`                  | `tumbler_container_kfd_mapped_bytes`            |
+| `/dev/infiniband/uverbs*` / `rdma_cm` | `tumbler_container_ibverbs_mapped_bytes` |
+
+Render-minor → GPU index resolution uses the existing
+`/sys/class/drm/renderDN/dev` discovery, so DRM mappings are
+attributed to the same GPU label the rest of the toolkit uses.
+
+### Why two redundant signals
+
+Slice (i) reports what the kernel *attests* the GPU holds; slice (ii)
+reports what the process actually *mapped*. They normally agree on
+GTT size to within page-rounding, so the agent can flag divergences as
+"workload mapped X but kernel sees only Y" — one of the symptoms in
+the customer's RDMA-pin-leak case where mappings outlive the GPU's
+fence accounting.
+
+### Real-machine validation on 8×MI250X (24.19)
+
+Host-side `tumbler-vram-stress --gpu 0 --bytes 60M --hold 60s`,
+registered with `tumbler-ctk pool register --pid <stress> --gpus 0`:
+
+| Metric                                       | GPU 0 value     | Source            |
+|----------------------------------------------|-----------------|-------------------|
+| `vram_resident_bytes`                        | 62 959 616      | drm-resident-vram |
+| `vram_requested_bytes`                       | 62 959 616      | amd-requested-vram|
+| `gtt_resident_bytes`                         |  2 138 112      | drm-resident-gtt  |
+| `host_pinned_bytes` (= GTT + CPU resident)   |  2 138 112      | derived           |
+| `drm_mapped_bytes`                           | 62 947 328      | /proc/maps        |
+| `kfd_mapped_bytes`                           |     32 768      | /proc/maps        |
+| `ibverbs_mapped_bytes`                       |          0      | /proc/maps        |
+
+Two independent paths confirm the same workload — exactly the
+cross-check the guard layer needs before deciding to escalate.
+
+### Newly added admin debug commands
+
+- `tumbler-ctk pool register --id … --pid … --gpus … --reserve … --priority …`
+- `tumbler-ctk pool unregister --id …`
+
+Mirrors the wire calls the OCI hook makes; useful for smoke tests
+against host-side processes (no container needed).
+
+Source commit: `34dc6cb..HEAD` (slice-i+ii) on
+[`AFDEAPAC/tumbler-container-runtime`](https://github.com/AFDEAPAC/tumbler-container-runtime).
