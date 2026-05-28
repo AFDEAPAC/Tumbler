@@ -313,3 +313,36 @@ Implementation strategy: phase 1 ships the hook logic as
 `libtumbler-plugin.so` invoked via LD_PRELOAD wrapper (off-by-default
 optional); phase 2 is the AMD ROCm conversation; phase 3 is the
 vendor-blessed plugin landing in stock ROCm.
+
+### Phase-1 implementation landed (added 2026-05-29)
+
+Phase 1 of the plugin design is now in tree at
+[`runtime/plugin/`](https://github.com/AFDEAPAC/tumbler-container-runtime/tree/main/runtime/plugin)
+with full validation against four reproducers from the alibabaHang
+set on the 24.19 host. Headline result: `kfd_wait_events_hang`
+collapses **20.46 s baseline → 5.12 s shim-on** with no errno
+change, no abort risk, and no kernel D-state — exactly the V17.5
+P1.2 modparam behaviour, achieved entirely from userspace.
+
+Three HIP-stack reproducers (`hipdevicesync_unbounded`,
+`multistream_combo`, `fixk1_stress`) confirmed the shim is
+harmless on workloads that don't need clamping on the 24.19
+kernel (which already carries upstream K-6.2). Per-call overhead
+is below measurement noise; one-time process startup is +50 ms.
+
+The shim ships as two .so files
+(`libtumbler-plugin.so` policy core + `libtumbler-preload.so`
+LD_PRELOAD wrapper) and is fully integrated with the agent via a
+new UDS server at `/run/tumbler/plugin.sock` that pushes
+per-container `wait_policy` on register/unregister. End-to-end
+agent-pushed override was verified: `max_wait_ms=3000` from the
+agent overrides the plugin's env-var default of 5000 in real
+time, with the next ioctl returning at 3.04 s.
+
+Full per-run table and per-reproducer notes in
+[`docs/phase1_validation_results.md`](https://github.com/AFDEAPAC/tumbler-container-runtime/blob/main/docs/phase1_validation_results.md).
+A/B driver and TSV at
+[`validation/phase1/`](https://github.com/AFDEAPAC/tumbler-container-runtime/tree/main/validation/phase1).
+Pending-only by design — explicit reject paths
+(`HSA_STATUS_ERROR_OUT_OF_RESOURCES` / `hipErrorOutOfMemory`)
+remain deferred for now.
