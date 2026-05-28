@@ -104,3 +104,49 @@ change required when the K-5 kernel is rolled out.
    `ROCm/k8s-device-plugin` into a single Helm chart.
 5. Auto-tune the `evict_high` watermark per workload via the agent's
    metrics history (Tumbler-meets-AI follow-up).
+
+## Runtime support boundary (added 2026-05-28)
+
+Mapped the toolkit against 13 alibabaHang memory/pin/cgroup/evict
+reproducers. Headline: the toolkit covers ~3/13 directly and gives
+observability on 10/13; the other ~77% are kernel D-state paths
+that need V17.5 amdgpu modparams. Toolkit and kernel patches are
+**complementary, not substitutes**.
+
+### A/B verification on 8×MI250X (5 safe reproducers)
+
+| Reproducer | Result |
+|---|---|
+| `startup_smoke` | Plan hypothesis "toolkit firewall-defaults regression" **falsified** on ROCm 7.0 — 15/15 PASS across {sanity, full-table, L2-min, toolkit-only, toolkit+full} × {32G, 64G, unbounded} memcg |
+| `mr_burn_dmabuf` | Toolkit registered 4 GiB HSA reservation correctly; binary failed at `ibv_reg_mr ERRNO=14` (PeerMem absent on ROCm 7.0). DMABUF cap is enforced kernel-side regardless of toolkit. |
+| `multistream_combo` | Small-scale 4×128 MB×40 iters: A & B both ~2.8 s. Transient kworker D-state cleared. Agent VRAM gauge tracked workload working set. |
+| `dmabuf_validate_hang` | `fake_importer.ko` unbuildable on stock 6.14 (DMA_BUF namespace API moved). Both A (1610 ms) and B (1653 ms) fail at same upstream point. Agent gauges correctly stay flat for host RAM pressure. |
+| `cross_cgroup_evict` | 3 containers registered concurrently; per-GPU aggregation gauge correctly partitions `{gpu="0"}` vs `{gpu="1"}`. Pinner failed at `ibv_reg_mr` upstream. |
+
+### Paper analysis (8 D-state-risky reproducers, kernel-only territory)
+
+| Reproducer | Required V17.5 modparam |
+|---|---|
+| `fixk1_stress` | `bo_sync_wait_max_ms=30000` |
+| `rdma_dereg_hang` | `sdma_fence_watchdog_ms=30000` |
+| `death_a1_svm_quiesce` | `kfd_wait_max_ms_per_wall=5000` |
+| `svm_quiesce_hang` | `kfd_wait_max_ms_per_wall=5000` + `bo_sync_wait_max_ms=30000` |
+| `death_a2_bo_sync_wait` | `sdma_fence_watchdog_ms=30000 suballoc_timeout_ms=4000` |
+| `stuck_fence_proof` | `bo_sync_wait_max_ms=30000` |
+| `sdma_suballoc_hang` | `suballoc_timeout_ms=4000` + `ROCR_SDMA_WRITE_ADDR_FAIL_MS=500` |
+| `kfd_wait_events_hang` | `kfd_wait_max_ms_per_wall=5000` |
+
+### Headline conclusion
+
+The Tumbler container toolkit occupies a real and useful niche
+(per-container VRAM reservation, evict-warning event fan-out,
+Prometheus observability) but is **not** a replacement for the V17.5
+amdgpu kernel patches. Production deployment should ship **both**:
+install the V17.5 DKMS to bound the kernel D-state paths, then run
+`tumbler-runtime` + `tumbler-mempool-agent` to give containers
+per-tenant fairness, scoped evict warnings, and observability.
+
+Full mapping table + A/B run logs:
+[`s3://home/chun-wan/tumbler-poc-report/index.html`](https://github.com/AFDEAPAC/Tumbler)
+section *Runtime support boundary*; raw artefacts under
+`s3://home/chun-wan/tumbler-poc-report/runtime-boundary/`.
