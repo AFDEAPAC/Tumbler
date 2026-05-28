@@ -1,52 +1,69 @@
-# Tumbler — POC extras (container runtime + memory pool agent)
+# Tumbler — POC extras (merged container toolkit)
 
-Companion POC delivered 2026-05-28. Two new AFDEAPAC repos extend the
-original three-layer Tumbler firewall (CLR / ROCr / amdgpu) with the
-container-platform tier:
+Companion POC delivered 2026-05-28. **Updated: the originally separate
+`tumbler-container-runtime` + `tumbler-mempool-agent` repos have been
+merged into a single monorepo.**
 
-- [`AFDEAPAC/tumbler-container-runtime`](https://github.com/AFDEAPAC/tumbler-container-runtime) —
-  OCI runtime + CDI generator + cgroup + partition + experimental MPS-like.
-  Mirrors the **full feature set** of NVIDIA's `nvidia-container-toolkit`
-  (`nvidia-container-runtime` / `nvidia-container-cli` / `nvidia-ctk` /
-  GPU-feature-discovery) for ROCm.
-- [`AFDEAPAC/tumbler-mempool-agent`](https://github.com/AFDEAPAC/tumbler-mempool-agent) —
-  per-node Go + cgo daemon. Pre-allocates an HSA reserved pool, polls
-  sysfs VRAM watermarks, subscribes to KFD's `AMDKFD_IOC_SMI_EVENTS`
-  ioctl, broadcasts JSON evict warnings to per-container Unix sockets,
-  serves Prometheus metrics on `:9410`. **The evict-pre-warn channel has
-  no NVIDIA equivalent** — KFD's whole-queue eviction is otherwise invisible
-  to userspace until the queue restarts.
+- [`AFDEAPAC/tumbler-container-toolkit`](https://github.com/AFDEAPAC/tumbler-container-toolkit) —
+  one Go module shipping seven binaries:
+  - `tumbler-runtime` — OCI shim wrapping `runc`
+  - `tumbler-runtime-hook` — prestart + poststop OCI hook
+  - `tumbler-container-cli` — low-level injector (mirrors `nvidia-container-cli`)
+  - `tumbler-ctk` — config + CDI + partition + `pool ls`
+  - `tumbler-mempool-agent` — per-node daemon (HSA reserved pool, KFD SMI
+    subscriber, container registry, Prometheus exporter, IPC broker)
+  - `tumbler-shim` — in-container event subscriber
+  - `tumbler-vram-stress` — host-side test stressor (HSA cgo)
 
-## Strategic differentiator
+## Why merge
 
-NVIDIA signals VRAM pressure at the unified-memory page-fault level inside
-the application. ROCm's KFD evicts entire queues with no application-visible
-warning, so a single greedy tenant can stall co-tenants for tens of
-seconds before any workload notices. By moving the early-warning into a
-privileged userspace daemon (no kernel patch required — `AMDKFD_IOC_SMI_EVENTS`
-exists since 2020), Tumbler lets containers **opt-in to graceful
-degradation**:
+NVIDIA splits `nvidia-container-toolkit` / `libnvidia-container` /
+`nvidia-container-runtime` across multiple distro packages, but the
+user-facing model is one tool. Tumbler keeps the binary split (different
+processes for systemd / lifetime reasons) but ships them together so:
+
+- **`docker run --runtime=tumbler` is enough** — the prestart hook contacts
+  the local agent at `/run/tumbler/agent.sock`, asks for a budget
+  (`TUMBLER_RESERVE_BYTES`), and the agent reserves it via HSA cgo before
+  the workload starts.
+- **EvictWarn events are scoped to the right container.** The agent's
+  `internal/registry` knows which GPU each container holds (from
+  registration) and only fans out events on those GPUs.
+- **Single `go.mod`, single `Makefile`, single CI matrix.**
+- **One Helm chart.** The DaemonSet ships everything in one Pod.
+
+## Strategic differentiator (unchanged)
+
+NVIDIA signals VRAM pressure at the unified-memory page-fault level
+inside the application. ROCm's KFD evicts entire queues with no
+application-visible warning, so a single greedy tenant can stall
+co-tenants for tens of seconds before any workload notices. By moving
+the early-warning into a privileged userspace daemon (no kernel patch
+required — `AMDKFD_IOC_SMI_EVENTS` exists since 2020), Tumbler lets
+containers **opt-in to graceful degradation**:
 
 ```
 Tumbler agent SMI sub  →  EvictWarn JSON  →  /run/tumbler/<cid>.sock  →  tumbler-shim  →  workload drop+retry
 ```
 
-## POC headline result (8×MI250X · ROCm 6.14.14 · kernel 6.14)
+## Headline results (8×MI250X · ROCm 6.14.14 · kernel 6.14)
 
-- All eight MI250X GCDs discovered correctly via the ROCm/k8s-device-plugin
+- All 8 MI250X GCDs discovered correctly via the ROCm/k8s-device-plugin
   topology parser (ported into `internal/discover/sysfs.go`).
 - `docker run --runtime=tumbler ...` triggers the OCI shim; the spec
   rewrite injected `/dev/kfd`, all 8 `/dev/dri/renderD128..D135`, library
-  bind-mounts, capabilities, and the prestart hook.
+  bind-mounts, capabilities, and the prestart + poststop hooks.
 - Sparse `AMD_VISIBLE_DEVICES=0,3,7` correctly produced exactly three
   render minors (D128, D131, D135).
 - `tumbler-vram-stress` reserved 50 GiB on GPU 0 in **334 µs**; the agent's
   watermark poller crossed the high threshold on the next 50 ms tick and
-  broadcast an `evict_high` JSON event to the registered shim subscriber
-  before the kernel evicted any queue.
-- Prometheus exporter (`tumbler_gpu_vram_used_bytes`,
-  `tumbler_kfd_evict_total`, `tumbler_evict_warn_lead_time_ms` histogram,
-  `tumbler_pool_reserved_bytes`, …) live on `:9410`.
+  broadcast an `evict_high` JSON event to the registered shim subscriber.
+- **Auto-register end-to-end**: `docker run --runtime=tumbler
+  -e TUMBLER_RESERVE_BYTES=2147483648 -e AMD_VISIBLE_DEVICES=0` →
+  `tumbler-ctk pool ls` showed the container with reserved 2 GiB on GPU 0;
+  Prom metric `tumbler_pool_container_reserved_bytes{gpu="0"} = 2.147e9`;
+  `/run/tumbler/<cid>.sock` opened. On container exit the poststop hook
+  unregistered cleanly and the metric returned to zero.
 
 ## Linkage to existing Tumbler firewall
 
@@ -61,16 +78,19 @@ Tumbler agent SMI sub  →  EvictWarn JSON  →  /run/tumbler/<cid>.sock  →  t
 
 - Single-file dark-theme HTML report (per the user's review-format
   preference): `s3://home/chun-wan/tumbler-poc-report/index.html`
-- Demo logs at `s3://home/chun-wan/tumbler-poc-report/logs/`
-- Source: `git@github.com:AFDEAPAC/tumbler-container-runtime.git`,
-  `git@github.com:AFDEAPAC/tumbler-mempool-agent.git`
+- Demo logs (4 files): `s3://home/chun-wan/tumbler-poc-report/logs/`
+- Merged repo bundle + push script:
+  `s3://home/chun-wan/tumbler-poc-report/bundles/tumbler-container-toolkit.bundle`
+- Source: `git@github.com:AFDEAPAC/tumbler-container-toolkit.git`
+  (creation pending — `push_to_afdeapac.ps1` ready to run once the empty
+  repo exists in the AFDEAPAC org)
 
 ## Phase status
 
-All seven plan phases are green. Phase 3 fell back to `memory.max` only
-because the test host runs stock kernel 6.14 without the K-5 patch — the
-fallback is detected and logged at runtime; no source change required when
-the K-5 kernel is rolled out.
+All 11 phases (7 POC + 4 merge) are green. Phase 3 fell back to
+`memory.max` only because the test host runs stock kernel 6.14 without
+the K-5 patch — the fallback is detected and logged at runtime; no source
+change required when the K-5 kernel is rolled out.
 
 ## Future work
 
