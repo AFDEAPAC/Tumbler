@@ -4,7 +4,7 @@ Companion POC delivered 2026-05-28. **Updated: the originally separate
 `tumbler-container-runtime` + `tumbler-mempool-agent` repos have been
 merged into a single monorepo.**
 
-- [`AFDEAPAC/rocm-container-runtime`](https://github.com/AFDEAPAC/rocm-container-runtime) (originally drafted as `tumbler-container-toolkit`; pushed under the broader product name) —
+- [`AFDEAPAC/tumbler-container-runtime`](https://github.com/AFDEAPAC/tumbler-container-runtime) (originally drafted as `tumbler-container-toolkit`; renamed to keep the Tumbler product line consistent) —
   one Go module shipping seven binaries:
   - `tumbler-runtime` — OCI shim wrapping `runc`
   - `tumbler-runtime-hook` — prestart + poststop OCI hook
@@ -81,7 +81,7 @@ Tumbler agent SMI sub  →  EvictWarn JSON  →  /run/tumbler/<cid>.sock  →  t
 - Demo logs (4 files): `s3://home/chun-wan/tumbler-poc-report/logs/`
 - Merged repo bundle + push script:
   `s3://home/chun-wan/tumbler-poc-report/bundles/tumbler-container-toolkit.bundle`
-- Source: [`AFDEAPAC/rocm-container-runtime`](https://github.com/AFDEAPAC/rocm-container-runtime) (pushed 2026-05-28; HEAD at the stale-gauge fix commit)
+- Source: [`AFDEAPAC/tumbler-container-runtime`](https://github.com/AFDEAPAC/tumbler-container-runtime) (pushed 2026-05-28; HEAD at the stale-gauge fix commit)
 
 ## Phase status
 
