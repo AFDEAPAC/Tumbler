@@ -346,3 +346,33 @@ A/B driver and TSV at
 Pending-only by design — explicit reject paths
 (`HSA_STATUS_ERROR_OUT_OF_RESOURCES` / `hipErrorOutOfMemory`)
 remain deferred for now.
+
+### Reject mode (soft, non-abort) added 2026-05-29
+
+The deferred reject path is now implemented, built around one hard
+rule: **it must never abort the workload**. Reject mode refuses an
+allocation that would push a process past its per-container VRAM
+budget, but only ever returns the sanctioned out-of-memory status —
+`hipErrorOutOfMemory` for HIP, `HSA_STATUS_ERROR_OUT_OF_RESOURCES`
+for HSA — which the framework allocator retry paths already handle
+(PyTorch's caching allocator does `empty_cache()` + retry). Before
+rejecting it waits a configurable grace, re-checking the budget so
+transient pressure (a neighbour freeing, the agent raising the cap)
+can clear and the allocation still succeed.
+
+Validated on 24.19 (8x MI250): with a 4 GB cap on a 64 GB device,
+baseline grows to 16 GB unbounded (exit 0), while shim-on stops at
+3584 MB, returns `hipErrorOutOfMemory` on the over-cap alloc, the
+workload handles it and **exits 0** — no abort, no crash, no kernel
+D-state. The agent-push path (`reject_enabled` +
+`default_vram_cap_bytes` over `/run/tumbler/plugin.sock`) delivers
+the cap independently with the same clean result. This is the
+runtime-mutable per-tenant memory cap that NVIDIA MPS provides via
+`CUDA_MPS_PINNED_DEVICE_MEM_LIMIT`, achieved here entirely in
+userspace.
+
+Full results:
+[`docs/phase1_reject_results.md`](https://github.com/AFDEAPAC/tumbler-container-runtime/blob/main/docs/phase1_reject_results.md).
+Off by default; gated by `plugin_ipc.reject_enabled` + a non-zero
+VRAM cap. Host-pin reject (`hsa_amd_memory_lock`) is plumbed in the
+policy but not yet enforced — VRAM budget only in this phase.
